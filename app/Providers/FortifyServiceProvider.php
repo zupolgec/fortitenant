@@ -16,6 +16,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Laravel\Fortify\Fortify;
 use Stancl\Tenancy\Exceptions\NotASubdomainException;
+use Stancl\Tenancy\Exceptions\TenantCouldNotBeIdentifiedOnDomainException;
 use Stancl\Tenancy\Resolvers\DomainTenantResolver;
 use Stancl\Tenancy\Tenancy;
 
@@ -32,56 +33,27 @@ class FortifyServiceProvider extends ServiceProvider
 
             $tenantDomain = $request->getHost();
 
-            if ($this->isSubdomain($request->getHost())) {
-                $tenantDomain = $this->makeSubdomain($request->getHost());
+            if (!in_array($tenantDomain, config('tenancy.central_domains'), true)) {
+                /** @var Tenancy $tenancy */
+                $tenancy = app(Tenancy::class);
+                /** @var DomainTenantResolver $tenantResolver */
+                $tenantResolver = app(DomainTenantResolver::class);
 
-                if ($tenantDomain instanceof Exception) {
+                try {
+                    if (!$tenancy->initialized) {
+                        $tenancy->initialize(
+                            $tenantResolver->resolve(
+                                $tenantDomain
+                            )
+                        );
+                    }
+                } catch (TenantCouldNotBeIdentifiedOnDomainException $e) {
                     return Auth::guard(config('fortify.guard', null));
                 }
             }
 
-            /** @var Tenancy $tenancy */
-            $tenancy = app(Tenancy::class);
-            /** @var DomainTenantResolver $tenantResolver */
-            $tenantResolver = app(DomainTenantResolver::class);
-
-            if (!$tenancy->initialized) {
-                $tenancy->initialize(
-                    $tenantResolver->resolve(
-                        $tenantDomain
-                    )
-                );
-            }
-
             return Auth::guard(config('fortify.guard', null));
         });
-    }
-
-    /** Copy tenancy functions for usage with building fortify guard */
-
-    protected function isSubdomain(string $hostname): bool
-    {
-        return Str::endsWith($hostname, config('tenancy.central_domains'));
-    }
-
-    /** @return Exception|string */
-    protected function makeSubdomain(string $hostname)
-    {
-        $parts = explode('.', $hostname);
-
-        $isLocalhost = count($parts) === 1;
-        $isIpAddress = count(array_filter($parts, 'is_numeric')) === count($parts);
-
-        // If we're on localhost or an IP address, then we're not visiting a subdomain.
-        $isACentralDomain = in_array($hostname, config('tenancy.central_domains'), true);
-        $notADomain = $isLocalhost || $isIpAddress;
-        $thirdPartyDomain = !Str::endsWith($hostname, config('tenancy.central_domains'));
-
-        if ($isACentralDomain || $notADomain || $thirdPartyDomain) {
-            return new NotASubdomainException($hostname);
-        }
-
-        return $hostname;
     }
 
     /**
